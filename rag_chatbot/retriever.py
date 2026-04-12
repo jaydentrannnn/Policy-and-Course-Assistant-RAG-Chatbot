@@ -39,7 +39,7 @@ _OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "nomic-embed-text")
 
 _DB_CONFIG = {
     "courses":  {"path": str(PROJECT_ROOT / "data" / "db" / "courses"),  "k": 20},
-    "policies": {"path": str(PROJECT_ROOT / "data" / "db" / "policies"), "k": 15},
+    "policies": {"path": str(PROJECT_ROOT / "data" / "db" / "policies"), "k": 20},
     "majors":   {"path": str(PROJECT_ROOT / "data" / "db" / "majors"),   "k": 25},
 }
 
@@ -79,6 +79,7 @@ _collections: dict[str, chromadb.Collection] = {
 class _RouterDecision(BaseModel):
     collections: list[Literal["courses", "policies", "majors"]]
     major_keyword: str | None = None  # Program name for majors collection filtering
+    requires_full_requirements: bool = False  # True when student asks for the full course requirement list
 
 
 _router_llm = ChatOpenAI(model="gpt-5.4-mini", temperature=0).with_structured_output(
@@ -105,17 +106,24 @@ major_keyword: If the question is about a specific major or minor, set this to t
 exactly as it would appear in the UCI catalogue (e.g. "Computer Science", "Informatics",
 "Mathematics", "Electrical Engineering"). Leave null if no specific program is mentioned.
 This is used to filter the majors collection to only relevant programme pages.
+
+requires_full_requirements: Set to true ONLY when the student is explicitly asking what
+courses are required to complete a specific major or minor — e.g. "what courses do I need
+for the CS major?", "list the lower-division requirements for Computer Science", "what
+upper-division courses are required for Math?". Set to false for questions about major
+overview, specialisations, admissions, sample plans, career paths, or anything that is
+not specifically about the full course requirement list.
 """
 
 
-async def _route(question: str) -> tuple[list[str], str | None]:
+async def _route(question: str) -> tuple[list[str], str | None, bool]:
     decision: _RouterDecision = await _router_llm.ainvoke(
         [
             {"role": "system", "content": _ROUTER_SYSTEM},
             {"role": "user", "content": question},
         ]
     )
-    return decision.collections, decision.major_keyword
+    return decision.collections, decision.major_keyword, decision.requires_full_requirements
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -126,18 +134,22 @@ async def _query_collection(
     name: str,
     embedding: list[float],
     where_document: dict | None = None,
+    effective_k: int | None = None,
 ) -> list[Document]:
     """Query one Chroma collection and return LangChain Documents.
 
-    where_document: optional Chroma document filter, e.g. {"$contains": "Computer Science"}.
-    Applied only when provided — falls back to pure semantic search otherwise.
+    where_document: optional Chroma document filter. Supports both single
+        {"$contains": "..."} and combined {"$and": [...]} Chroma operators.
+    effective_k: override the result count. When None, defaults to 60 if a
+        filter is active (smaller candidate pool) or the per-collection k otherwise.
     """
     k = _DB_CONFIG[name]["k"]
     collection = _collections[name]
 
-    # When filtering by document content the candidate pool is much smaller,
-    # so request more results to capture all chunks from the matching page.
-    effective_k = 60 if where_document else k
+    if effective_k is None:
+        # When filtering, the candidate pool is smaller so request more results
+        # to avoid missing relevant chunks from the target page.
+        effective_k = 60 if where_document else k
     query_kwargs: dict = dict(
         query_embeddings=[embedding],
         n_results=effective_k,
@@ -174,21 +186,41 @@ async def _retrieve_parallel(
     question: str,
     collections: list[str],
     major_keyword: str | None = None,
+    requires_full_requirements: bool = False,
 ) -> list[Document]:
     """Embed once, then query all selected collections in parallel.
 
     major_keyword: if set, the majors collection is filtered to documents containing
-    this string — bypasses nomic-embed-text's weak semantic matching for programme names.
+        this string — bypasses nomic-embed-text's weak semantic matching for programme names.
+    requires_full_requirements: when True alongside a major_keyword, applies a combined
+        $and filter that scopes results to the "Major Requirements" section only, excluding
+        overview and admissions chunks that would otherwise rank above the course lists.
     """
-    # Use the same OllamaEmbeddingFunction as ingest.py — guarantees vector compatibility.
     loop = asyncio.get_event_loop()
     embeddings = await loop.run_in_executor(None, _embedding_fn, [question])
     embedding: list[float] = embeddings[0]
 
     tasks = []
     for name in collections:
-        where_doc = {"$contains": major_keyword} if (name == "majors" and major_keyword) else None
-        tasks.append(_query_collection(name, embedding, where_doc))
+        if name == "majors" and major_keyword:
+            if requires_full_requirements:
+                # Both strings must appear in the chunk: the programme name (in the
+                # prefix on every chunk from that page) AND "Major Requirements" (only
+                # present in the section-4 requirements chunks, not in the overview).
+                # effective_k=100 captures all specialisation chunks for large majors.
+                where_doc: dict = {
+                    "$and": [
+                        {"$contains": major_keyword},
+                        {"$contains": "Major Requirements"},
+                    ]
+                }
+                eff_k = 100
+            else:
+                where_doc = {"$contains": major_keyword}
+                eff_k = 60
+            tasks.append(_query_collection(name, embedding, where_doc, eff_k))
+        else:
+            tasks.append(_query_collection(name, embedding))
 
     batches = await asyncio.gather(*tasks)
 
@@ -211,9 +243,10 @@ async def _retrieve_parallel(
 _reranker = FlashrankRerank(top_n=15)
 
 
-def _rerank(docs: list[Document], question: str) -> list[Document]:
+def _rerank(docs: list[Document], question: str, top_n: int = 15) -> list[Document]:
     if not docs:
         return []
+    _reranker.top_n = top_n
     return _reranker.compress_documents(docs, question)
 
 
@@ -232,7 +265,7 @@ def _rerank(docs: list[Document], question: str) -> list[Document]:
 # Department: 2-8 letters, optional slash+letters (cross-listed), optional
 #             second word (BIO SCI). Number: optional leading letter + digits + trailing letters.
 _COURSE_CODE_RE = re.compile(
-    r"\b([A-Z]{2,8}(?:\s[A-Z]{2,8})?(?:/[A-Z]{2,8})?\s+[A-Z]?\d+[A-Z]{0,2})\b"
+    r"\b((?:[A-Z]&[A-Z]\s[A-Z]{2,8}|[A-Z]{2,8}(?:\s[A-Z]{2,8})?(?:/[A-Z]{2,8})?)\s+[A-Z]?\d+[A-Z]{0,2})\b"
 )
 
 
@@ -249,21 +282,66 @@ def _extract_course_codes(text: str) -> list[str]:
     ))
 
 
+# Department code alias table — maps student shorthand to UCI catalog codes.
+# Students commonly abbreviate; the catalog uses full department codes.
+# False-positive lookups for non-existent aliased codes are harmless —
+# Chroma returns an empty result, not an error. Extend this table as needed.
+_DEPT_ALIASES: dict[str, list[str]] = {
+    "CS":   ["COMPSCI"],
+    "CSCI": ["COMPSCI"],
+    "ICS":  ["I&C SCI"],
+    "INFX": ["IN4MATX"],
+    "INFO": ["IN4MATX"],
+    "PHYS": ["PHYSICS"],
+    "BIO":  ["BIO SCI"],
+    "STAT": ["STATS"],
+}
+
+
+def _expand_course_codes(codes: list[str]) -> list[str]:
+    """Expand extracted codes with aliased department variants.
+
+    e.g. ["CS 161"]  → ["CS 161",  "COMPSCI 161"]
+         ["ICS 6B"]  → ["ICS 6B",  "I&C SCI 6B"]
+    """
+    expanded = list(codes)
+    seen = set(codes)
+    for code in codes:
+        tokens = code.split()
+        # Course number is the last token that contains a digit
+        num_idx = next(
+            (i for i in range(len(tokens) - 1, -1, -1) if any(c.isdigit() for c in tokens[i])),
+            None,
+        )
+        if num_idx is None or num_idx == 0:
+            continue
+        dept = " ".join(tokens[:num_idx])
+        number = tokens[num_idx]
+        for alias in _DEPT_ALIASES.get(dept, []):
+            aliased = f"{alias} {number}"
+            if aliased not in seen:
+                expanded.append(aliased)
+                seen.add(aliased)
+    return expanded
+
+
 def _direct_course_lookup(codes: list[str]) -> list[Document]:
     """
-    Fetch course documents from the courses collection by ID.
-    Tries both 'CODE' and 'CODE::chunk_0' so chunked courses are found too.
+    Fetch course documents from the courses collection by metadata filter.
+
+    Expands codes through the alias table so student abbreviations (e.g. "CS 161")
+    also match their full catalog equivalents (e.g. "COMPSCI 161"). Returns all
+    chunks for every matched course — not just chunk_0.
     """
     if not codes or "courses" not in _collections:
         return []
 
+    all_codes = _expand_course_codes(codes)
     collection = _collections["courses"]
-    ids_to_try = []
-    for code in codes:
-        ids_to_try.append(code)
-        ids_to_try.append(f"{code}::chunk_0")
-
-    result = collection.get(ids=ids_to_try, include=["documents", "metadatas"])
+    result = collection.get(
+        where={"code": {"$in": all_codes}},
+        include=["documents", "metadatas"],
+    )
     docs = []
     for text, meta in zip(result["documents"], result["metadatas"]):
         if text:
@@ -274,16 +352,18 @@ def _direct_course_lookup(codes: list[str]) -> list[Document]:
 async def retrieve(question: str) -> list[Document]:
     """
     Full retrieval pipeline for a standalone question:
-      route → parallel retrieval → dedup → rerank
+      route → parallel retrieval → dedup → rerank (or order-preserve for requirements)
     Returns up to top_n reranked Documents with source metadata attached.
     """
     # Step 1: direct lookup for any course codes mentioned in the question
     codes = _extract_course_codes(question)
     direct_docs = _direct_course_lookup(codes)
 
-    # Step 2: semantic retrieval (with optional major keyword filter)
-    collections, major_keyword = await _route(question)
-    semantic_docs = await _retrieve_parallel(question, collections, major_keyword)
+    # Step 2: semantic retrieval (with optional major keyword / requirements filter)
+    collections, major_keyword, requires_full_requirements = await _route(question)
+    semantic_docs = await _retrieve_parallel(
+        question, collections, major_keyword, requires_full_requirements
+    )
 
     # Step 3: merge — direct docs first (guaranteed relevant), then semantic
     seen: set[str] = {d.page_content[:200] for d in direct_docs}
@@ -294,4 +374,13 @@ async def retrieve(question: str) -> list[Document]:
             direct_docs.append(d)
     all_docs = direct_docs
 
-    return _rerank(all_docs, question)
+    # Step 4: rerank — or skip for requirements queries
+    if requires_full_requirements:
+        # Requirements chunks are already pre-filtered to the exact section via the
+        # $and filter. The reranker penalises dense course-code lists in favour of
+        # prose, reversing the ordering we want. Return as-is, capped to avoid
+        # overwhelming the context window.
+        return all_docs[:20]
+
+    top_n = 25 if major_keyword else 20
+    return _rerank(all_docs, question, top_n=top_n)

@@ -13,6 +13,7 @@ a configurable session_id.
 """
 
 import os
+from collections import defaultdict
 
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage
@@ -48,6 +49,9 @@ _rewrite_prompt = ChatPromptTemplate.from_messages(
             "rewrite the message as a fully self-contained question that includes "
             "all necessary context (course codes, major names, policy topics, etc.) "
             "so it can be answered without the conversation history. "
+            "Expand common UCI course abbreviations to their official department codes "
+            "(e.g., CS to COMPSCI, ICS to I&C SCI, INF to IN4MATX, SE to SWE, MAE to ENGRMAE, CEE to ENGRCEE). "
+            "Ensure course codes are fully capitalized. "
             "If the message is already self-contained, return it unchanged. "
             "Output only the rewritten question — no explanation.",
         ),
@@ -76,13 +80,20 @@ def _format_context(inputs: dict) -> dict:
     if not docs:
         context = "No relevant information found in the UCI academic database."
     else:
+        # Group chunks by source URL so that multi-chunk pages (e.g. the full CS
+        # major requirements split across 6 chunks) read as one coherent document
+        # rather than 6 separate [Source N] blocks. This prevents the LLM from
+        # treating consecutive requirement chunks as unrelated sources.
+        # dict preserves insertion order (Python 3.7+), so retrieval ranking is kept.
+        groups: dict[str, list[Document]] = defaultdict(list)
+        for doc in docs:
+            url = doc.metadata.get("url", "") or "UCI Academic Resources"
+            groups[url].append(doc)
+
         parts = []
-        for i, doc in enumerate(docs, 1):
-            meta = doc.metadata
-            # Courses store URL directly; policy/major sections store under "url"
-            url = meta.get("url", "")
-            label = url if url else "UCI Academic Resources"
-            parts.append(f"[Source {i} — {label}]\n{doc.page_content}")
+        for i, (url, group_docs) in enumerate(groups.items(), 1):
+            combined = "\n\n".join(d.page_content for d in group_docs)
+            parts.append(f"[Source {i} — {url}]\n{combined}")
         context = "\n\n---\n\n".join(parts)
     return {**inputs, "context": context}
 
@@ -95,16 +106,27 @@ _answer_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a concise academic assistant for UCI (University of California, Irvine) students. "
+            "You are a friendly, knowledgeable academic assistant for UCI (University of California, Irvine) students. "
             "Answer questions about courses, academic policies, and major/minor requirements "
-            "using only the information in the provided context. "
-            "\n\n"
+            "conversationally and directly, like a well-informed peer advisor.\n\n"
             "Guidelines:\n"
-            "- Be direct and brief. Get to the answer immediately — no preamble.\n"
-            "- Use bullet points for lists of courses or requirements; prose for simple yes/no answers.\n"
-            "- Cite source URLs inline only when directly quoting or listing requirements.\n"
-            "- If the context is insufficient, say so in one sentence and point to the UCI catalogue or an advisor.\n"
+            "- Get straight to the answer — no preamble.\n"
+            "- Use bullet points for lists of courses or requirements; prose for simple questions.\n"
+            "- For multi-part questions, answer each part in order.\n"
+            "- If you have partial information, give what you know, then add one brief sentence "
+            "directing the student where to find the rest (e.g. 'Check your program page in the "
+            "UCI Catalogue or ask your advisor.').\n"
+            "- Only ask a clarifying question when the answer would be fundamentally different "
+            "depending on the response (e.g. asking which major when graduation requirements vary "
+            "by program). Do not ask when you already have enough context to give a useful answer.\n"
+            "- Never narrate what your sources do or don't say. Never say 'the provided context "
+            "does not state' or 'this is not supported by the context.' Just answer naturally.\n"
+            "- Never analyze or grade your own answer.\n"
+            "- When citing a source, use the full URL in parentheses, e.g. (https://catalogue.uci.edu/...). "
+            "Cite only when listing specific requirements or quoting exact policy language.\n"
             "- Never repeat the question back. Never explain what you are about to do.\n"
+            "- If the question is unrelated to UCI academics (courses, policies, majors, or student life), "
+            "briefly say so and redirect the student to the appropriate resource.\n"
             "- Do not fabricate course names, codes, prerequisites, or policy details.",
         ),
         MessagesPlaceholder("chat_history"),
