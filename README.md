@@ -20,8 +20,8 @@
 
 ## Demo
 
-![Chat Interface](docs/screenshots/mew_chat.png)
-![Conversation in Action](docs/screenshots/streamed_answer.png)
+![Chat Interface](doc/screenshots/mew_chat.png)
+![Conversation in Action](doc/screenshots/streamed_answer.png)
 <!-- TODO: GIF (optional) — docs/screenshots/file-upload.gif -->
 
 ---
