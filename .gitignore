@@ -54,3 +54,12 @@ htmlcov/
 # Claude Code — user-specific memory and settings (not project files)
 # ──────────────────────────────────────────────────────────────────────────────
 .claude/
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Eval — timestamped run results (rebuild by re-running eval/run_all.py)
+# Auto-generated datasets (rebuild with eval/build_dataset.py after crawling)
+# ──────────────────────────────────────────────────────────────────────────────
+eval/runs/
+eval/datasets/courses.jsonl
+eval/datasets/majors.jsonl
+eval/datasets/policies.jsonl

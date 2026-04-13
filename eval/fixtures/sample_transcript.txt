@@ -1,0 +1,52 @@
+UNIVERSITY OF CALIFORNIA, IRVINE
+UNOFFICIAL TRANSCRIPT
+
+Student Name:   Alex Rivera
+Student ID:     12345678
+Major:          Computer Science (B.S.)
+Catalog Year:   2024-2025
+Cumulative GPA: 3.45
+
+═══════════════════════════════════════════════════════
+COMPLETED COURSEWORK
+═══════════════════════════════════════════════════════
+
+FALL QUARTER 2023
+─────────────────────────────────────────────
+I&C SCI 31    Introduction to Programming         4 Units    A-
+I&C SCI 6B    Boolean Logic and Discrete Struct.  4 Units    B+
+MATH 2A       Single-Variable Calculus I           4 Units    A
+WRITING 39C   Argument and Research               4 Units    B+
+
+WINTER QUARTER 2024
+─────────────────────────────────────────────
+I&C SCI 32    Programming with Libraries          4 Units    A
+I&C SCI 6D    Data Structure Implementation       4 Units    B+
+MATH 2B       Single-Variable Calculus II          4 Units    B+
+PHYSICS 7C    Classical Physics                    4 Units    B
+
+SPRING QUARTER 2024
+─────────────────────────────────────────────
+I&C SCI 33    Intermediate Programming             4 Units    A-
+COMPSCI 111   Digital Logic, Comp. Organization   4 Units    B+
+MATH 3A       Introduction to Linear Algebra       4 Units    A
+STATS 67      Introduction to Probability/Stats    4 Units    B+
+
+FALL QUARTER 2024
+─────────────────────────────────────────────
+I&C SCI 45C   C/C++ Programming                   4 Units    A
+COMPSCI 122A  Introduction to Data Management     4 Units    A-
+COMPSCI 161   Design and Analysis of Algorithms   4 Units    B
+MATH 105A     Numerical Analysis                  4 Units    B+
+
+═══════════════════════════════════════════════════════
+UNITS SUMMARY
+═══════════════════════════════════════════════════════
+Total Units Completed: 64
+Units in Progress:      0
+Units Remaining (est.): 76
+
+═══════════════════════════════════════════════════════
+NOTE: This is an unofficial transcript for advising purposes only.
+Contact the UCI Registrar for an official copy.
+═══════════════════════════════════════════════════════

@@ -186,6 +186,55 @@ React + Vite + Tailwind + shadcn/ui. Package manager is `pnpm`.
 - `python-dotenv` — reads `.env` for `OPENAI_API_KEY` (copy `.env.example` to `.env`)
 - Frontend: `react`, `vite`, `tailwindcss`, `react-markdown`, `remark-gfm`, `motion`
 
+## Benchmarking (`eval/`)
+
+Layered evaluation harnesses. Run from the project root with the venv active.
+
+**Build auto-generated datasets** (requires `data/raw/` from a prior crawl):
+```bash
+python eval/build_dataset.py
+# Emits eval/datasets/courses.jsonl, majors.jsonl, policies.jsonl
+# eval/datasets/hard_cases.jsonl is hand-curated and already committed
+```
+
+**Run a specific harness:**
+```bash
+python eval/run_all.py --harness router --dataset hard --limit 20
+python eval/run_all.py --harness retrieval --dataset courses --limit 50
+python eval/run_all.py --harness e2e --dataset hard --limit 10 --judge
+python eval/run_all.py --harness perf --limit 20
+```
+
+**Multi-turn / polarity tests via pytest:**
+```bash
+pytest eval/harnesses/multiturn_eval.py -v
+```
+
+**Compare two runs:**
+```bash
+python eval/report.py          # diffs latest vs previous run
+python eval/report.py --list   # show all available runs
+```
+
+Results land in `eval/runs/<timestamp>/` (gitignored). `conftest.py` at the project root handles `sys.path` for pytest.
+
+**Harness quick-reference:**
+
+| Harness | Needs Chroma | Key metric |
+|---|---|---|
+| `router` | No | Collection F1, `requires_full_requirements` accuracy |
+| `retrieval` | Yes | Recall@1/3/10, MRR, direct-lookup hit rate |
+| `e2e` | Yes | Citation accuracy, field match, LLM judge faithfulness/relevance (1–5) |
+| `multiturn` | Yes | Polarity preservation, pronoun resolution (pytest assertions) |
+| `file` | Yes | `[User-Attached Document]` block present, answer references upload |
+| `perf` | Yes | Latency p50/p95, tokens/query, cost/query |
+
+**Critical implementation notes:**
+- `router_eval.py` reproduces the router LLM inline — it does **not** import `rag_chatbot.retriever`, so it runs without Chroma DBs.
+- All other harnesses import `rag_chatbot.retriever` which loads Chroma at import time. If DBs are missing they print an actionable message and exit with code 1; `multiturn_eval.py` skips via `pytestmark` instead of crashing pytest collection.
+- The `_answer_prompt` in `chain.py` requires `chat_history` in its input dict. Harnesses pass `"chat_history": []` when calling `_format_context` directly (single-turn eval has no history).
+- `eval/runs/` and the three auto-generated dataset files are gitignored. `hard_cases.jsonl` and `eval/fixtures/` are committed.
+
 ## Debugging
 
 `diagnose.py` (project root) — standalone script that checks Chroma collections directly: scans ICS school pages by URL, verifies specific course IDs (COMPSCI 161, I&C SCI 6B/6D), and runs semantic queries. Run with venv active: `python diagnose.py`. Edit inline for different queries.
