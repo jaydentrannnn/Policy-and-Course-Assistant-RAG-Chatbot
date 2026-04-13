@@ -22,7 +22,6 @@
 
 ![Chat Interface](doc/screenshots/new_chat.png)
 ![Conversation in Action](doc/screenshots/streamed_answer.png)
-<!-- TODO: GIF (optional) — docs/screenshots/file-upload.gif -->
 
 ---
 
@@ -40,8 +39,6 @@
 ---
 
 ## Architecture
-
-<!-- TODO: architecture diagram — docs/architecture.png -->
 
 ```mermaid
 graph LR
